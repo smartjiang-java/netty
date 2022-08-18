@@ -187,9 +187,9 @@ final class NativeDatagramPacketArray {
             }
             if (added) {
                 maxMessagesPerWrite--;
-                return maxMessagesPerWrite > 0 ? Boolean.TRUE : Boolean.FALSE;
+                return maxMessagesPerWrite > 0;
             }
-            return Boolean.FALSE;
+            return false;
         }
     }
 

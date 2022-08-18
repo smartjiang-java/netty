@@ -184,11 +184,10 @@ public final class EpollSocketChannel
 
         int readableComponents = buf.countReadableComponents();
         long attempted;
-        long written;
+        int written;
         if (readableComponents == 1) {
             attempted = buf.readableBytes();
             written = doWriteBytes(buf);
-            writeSink.complete(attempted, written, attempted == written ? 1 : 0, written > 0);
         }  else {
             attempted = Math.min(writeSink.estimatedMaxBytesPerGatheringWrite(), buf.readableBytes());
             ByteBuffer[] nioBuffers = new ByteBuffer[readableComponents];
@@ -197,10 +196,13 @@ public final class EpollSocketChannel
                 for (var c = iteration.first(); c != null; c = c.next()) {
                    nioBuffers[index++] = c.readableBuffer();
                 }
-                written = writeBytesMultiple(nioBuffers, nioBuffers.length, readableBytes, attempted);
+                written = (int) writeBytesMultiple(nioBuffers, nioBuffers.length, readableBytes, attempted);
             }
-            writeSink.complete(attempted, written, -1, written > 0);
         }
+        if (written > 0) {
+            buf.skipReadableBytes(written);
+        }
+        writeSink.complete(attempted, written, readableBytes == written ? 1 : 0, written > 0);
     }
 
     /**
