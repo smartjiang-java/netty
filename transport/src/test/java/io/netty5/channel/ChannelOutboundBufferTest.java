@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -60,7 +61,7 @@ public class ChannelOutboundBufferTest {
             buffer.addMessage(buf, 0, executor.newPromise());
             buffer.addFlush();
             AtomicInteger messageCounter = new AtomicInteger();
-            Function<Object, Boolean> messageProcessor = msg -> {
+            Predicate<Object> messageProcessor = msg -> {
                 assertNotNull(msg);
                 messageCounter.incrementAndGet();
                 return true;

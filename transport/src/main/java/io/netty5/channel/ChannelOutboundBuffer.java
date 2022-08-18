@@ -27,6 +27,7 @@ import io.netty5.util.internal.logging.InternalLogger;
 import io.netty5.util.internal.logging.InternalLoggerFactory;
 
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static java.util.Objects.requireNonNull;
 
@@ -412,7 +413,7 @@ final class ChannelOutboundBuffer {
      * in this {@link ChannelOutboundBuffer} until {@link Function#apply(Object)}
      * returns {@link Boolean#FALSE} or there are no more flushed messages to process.
      */
-    void forEachFlushedMessage(Function<Object, Boolean> processor) {
+    void forEachFlushedMessage(Predicate<Object> processor) {
         assert executor.inEventLoop();
 
         requireNonNull(processor, "processor");
@@ -424,7 +425,7 @@ final class ChannelOutboundBuffer {
 
         do {
             if (!entry.cancelled) {
-                if (processor.apply(entry.msg) != Boolean.TRUE) {
+                if (!processor.test(entry.msg)) {
                     return;
                 }
             }

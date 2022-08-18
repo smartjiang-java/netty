@@ -24,7 +24,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -178,9 +178,9 @@ public class ByteBufferCollectorTest {
 
     private static final class TestBuffer extends ArrayList<Object> {
 
-        void forEach(Function<Object, Boolean> function) {
+        void forEach(Predicate<Object> function) {
             for (Object o: this) {
-                if (Boolean.TRUE != function.apply(o)) {
+                if (!function.test(o)) {
                     return;
                 }
             }

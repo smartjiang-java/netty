@@ -26,7 +26,7 @@ import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
-import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static io.netty5.channel.unix.Limits.UIO_MAX_IOV;
 import static io.netty5.channel.unix.NativeInetAddress.copyIpv4MappedIpv6Address;
@@ -121,7 +121,7 @@ final class NativeDatagramPacketArray {
         }
     }
 
-    Function<Object, Boolean> addFunction(boolean connected, int maxMessagesPerWrite) throws Exception {
+    Predicate<Object> addFunction(boolean connected, int maxMessagesPerWrite) {
         processor.connected = connected;
         processor.maxMessagesPerWrite = maxMessagesPerWrite;
         return processor;
@@ -150,12 +150,12 @@ final class NativeDatagramPacketArray {
         iovArray.release();
     }
 
-    private final class MyMessageProcessor implements Function<Object, Boolean> {
+    private final class MyMessageProcessor implements Predicate<Object> {
         private boolean connected;
         private int maxMessagesPerWrite;
 
         @Override
-        public Boolean apply(Object msg) {
+        public boolean test(Object msg) {
             final boolean added;
             if (msg instanceof DatagramPacket) {
                 DatagramPacket packet = (DatagramPacket) msg;

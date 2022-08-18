@@ -20,9 +20,9 @@ import io.netty5.util.concurrent.FastThreadLocal;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
-import java.util.function.Function;
+import java.util.function.Predicate;
 
-final class ByteBufferCollector implements Function<Object, Boolean> {
+final class ByteBufferCollector implements Predicate<Object> {
 
     private static final FastThreadLocal<BufferCache> NIO_BUFFERS = new FastThreadLocal<>() {
         @Override
@@ -39,8 +39,8 @@ final class ByteBufferCollector implements Function<Object, Boolean> {
 
     /**
      * Returns the number of {@link ByteBuffer} that can be written out of the {@link ByteBuffer} array that was
-     * obtained via {@link #apply(Object)}. This method <strong>MUST</strong> be
-     * called after {@link #apply(Object)} was called.
+     * obtained via {@link #test(Object)}. This method <strong>MUST</strong> be
+     * called after {@link #test(Object)} was called.
      */
     int nioBufferCount() {
         return cache.bufferCount;
@@ -48,8 +48,8 @@ final class ByteBufferCollector implements Function<Object, Boolean> {
 
     /**
      * Returns the number of bytes that can be written out of the {@link ByteBuffer} array that was
-     * obtained via {@link #apply(Object)}. This method <strong>MUST</strong> be called
-     * after {@link #apply(Object)} was called.
+     * obtained via {@link #test(Object)}. This method <strong>MUST</strong> be called
+     * after {@link #test(Object)} was called.
      */
     long nioBufferSize() {
         return cache.totalSize;
@@ -104,13 +104,13 @@ final class ByteBufferCollector implements Function<Object, Boolean> {
     }
 
     @Override
-    public Boolean apply(Object msg) throws RuntimeException {
+    public boolean test(Object msg) throws RuntimeException {
         if (!(msg instanceof Buffer)) {
-            return Boolean.FALSE;
+            return false;
         }
         Buffer buf = (Buffer) msg;
         if (buf.readableBytes() == 0) {
-            return Boolean.TRUE;
+            return true;
         }
         try (var iterator = buf.forEachComponent()) {
             for (var c = iterator.firstReadable(); c != null; c = c.nextReadable()) {
@@ -128,7 +128,7 @@ final class ByteBufferCollector implements Function<Object, Boolean> {
                     // See also:
                     // - https://www.freebsd.org/cgi/man.cgi?query=write&sektion=2
                     // - https://linux.die.net//man/2/writev
-                    return Boolean.FALSE;
+                    return false;
                 }
                 cache.totalSize += byteBuffer.remaining();
                 ByteBuffer[] buffers = cache.buffers;
@@ -140,12 +140,12 @@ final class ByteBufferCollector implements Function<Object, Boolean> {
                 bufferCount++;
                 cache.bufferCount = bufferCount;
                 if (maxCount <= bufferCount) {
-                    return Boolean.FALSE;
+                    return false;
                 }
             }
         }
 
-        return Boolean.TRUE;
+        return true;
     }
 
     private static ByteBuffer[] expandNioBufferArray(ByteBuffer[] array, int neededSpace, int size) {

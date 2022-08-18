@@ -50,6 +50,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static io.netty5.channel.ChannelOption.ALLOW_HALF_CLOSURE;
 import static io.netty5.channel.ChannelOption.AUTO_CLOSE;
@@ -2054,14 +2055,14 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
         }
 
         /**
-         * Call {@link Function#apply(Object)} for each message that is flushed until
-         * {@link Function#apply(Object)} returns {@code false} or there are no more flushed messages.
+         * Call {@link Predicate#test(Object)} for each message that is flushed until
+         * {@link Predicate#test(Object)} returns {@code false} or there are no more flushed messages.
          *
          * @param processor                 the {@link Function} to use.
          * @throws IllegalStateException    if called after {@link #complete(long, long, int, boolean)}
          *                                  or {@link #complete(long, Throwable, boolean)} was called.
          */
-        public void forEach(Function<Object, Boolean> processor) {
+        public void forEach(Predicate<Object> processor) {
             outboundBuffer.forEachFlushedMessage(processor);
         }
 
