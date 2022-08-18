@@ -285,7 +285,7 @@ public class NioSocketChannel
     protected void doWriteNow(WriteSink writeSink)
             throws Exception {
         SocketChannel ch = javaChannel();
-        // Ensure the pending writes are made of ByteBufs only.
+        // Ensure the pending writes are made of Buffers only.
         collector.prepare(1024, writeSink.estimatedMaxBytesPerGatheringWrite());
         writeSink.forEach(collector);
         ByteBuffer[] nioBuffers = collector.nioBuffers();
