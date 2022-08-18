@@ -17,11 +17,11 @@ package io.netty5.channel.unix;
 
 import io.netty5.buffer.api.Buffer;
 import io.netty5.buffer.api.BufferComponent;
-import io.netty5.channel.ChannelOutboundBuffer.MessageProcessor;
 import io.netty5.util.internal.PlatformDependent;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.function.Function;
 
 import static io.netty5.channel.unix.Buffer.addressSize;
 import static io.netty5.channel.unix.Buffer.allocateDirectWithNativeOrder;
@@ -49,7 +49,7 @@ import static java.lang.Math.min;
  * <a href="https://rkennke.wordpress.com/2007/07/30/efficient-jni-programming-iv-wrapping-native-data-objects/"
  * >Efficient JNI programming IV: Wrapping native data objects</a>.
  */
-public final class IovArray implements MessageProcessor<RuntimeException> {
+public final class IovArray implements Function<Object, Boolean> {
 
     /** The size of an address which should be 8 for 64 bits and 4 for 32 bits. */
     private static final int ADDRESS_SIZE = addressSize();
@@ -226,15 +226,15 @@ public final class IovArray implements MessageProcessor<RuntimeException> {
     }
 
     @Override
-    public boolean processMessage(Object msg) {
+    public Boolean apply(Object msg) {
         if (msg instanceof Buffer) {
             var buffer = (Buffer) msg;
             if (buffer.readableBytes() == 0) {
-                return true;
+                return Boolean.TRUE;
             }
-            return addReadable(buffer);
+            return addReadable(buffer) ? Boolean.TRUE : Boolean.FALSE;
         }
-        return false;
+        return Boolean.FALSE;
     }
 
     public boolean addReadable(Buffer buffer) {

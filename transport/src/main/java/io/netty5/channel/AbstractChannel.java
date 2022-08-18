@@ -49,6 +49,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
 import static io.netty5.channel.ChannelOption.ALLOW_HALF_CLOSURE;
 import static io.netty5.channel.ChannelOption.AUTO_CLOSE;
@@ -57,8 +58,10 @@ import static io.netty5.channel.ChannelOption.BUFFER_ALLOCATOR;
 import static io.netty5.channel.ChannelOption.CONNECT_TIMEOUT_MILLIS;
 import static io.netty5.channel.ChannelOption.MESSAGE_SIZE_ESTIMATOR;
 import static io.netty5.channel.ChannelOption.READ_HANDLE_FACTORY;
+import static io.netty5.channel.ChannelOption.TCP_FASTOPEN_CONNECT;
 import static io.netty5.channel.ChannelOption.WRITE_BUFFER_WATER_MARK;
 import static io.netty5.channel.ChannelOption.WRITE_HANDLE_FACTORY;
+import static io.netty5.util.internal.ObjectUtil.checkInRange;
 import static io.netty5.util.internal.ObjectUtil.checkPositiveOrZero;
 import static java.util.Objects.requireNonNull;
 
@@ -123,7 +126,8 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
     private ReadBufferAllocator readBeforeActive;
 
     private ReadSink readSink;
-    private WriteHandleFactory.WriteHandle writeHandle;
+
+    private WriteSink writeSink;
 
     private MessageSizeEstimator.Handle estimatorHandler;
     private boolean inWriteFlushed;
@@ -407,10 +411,7 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
     }
 
     protected final WriteHandleFactory.WriteHandle writeHandle() {
-        if (writeHandle == null) {
-            writeHandle = getWriteHandleFactory().newHandle(this);
-        }
-        return writeHandle;
+        return writeSink().writeHandle;
     }
 
     private ReadSink readSink() {
@@ -420,6 +421,15 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
             readSink = new ReadSink(getReadHandleFactory().newHandle(this));
         }
         return readSink;
+    }
+
+    private WriteSink writeSink() {
+        assertEventLoop();
+
+        if (writeSink == null) {
+            writeSink = new WriteSink(getWriteHandleFactory().newHandle(this));
+        }
+        return writeSink;
     }
 
     private void registerTransport(final Promise<Void> promise) {
@@ -888,14 +898,14 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
             try {
                 closed = doReadNow(readSink);
             } catch (Throwable cause) {
-                if (readSink.completeFailure(readHandle(), cause)) {
+                if (readSink.completeFailure(cause)) {
                     shutdownReadSide();
                 } else {
                     closeTransport(newPromise());
                 }
                 return;
             }
-            readSink.complete(readHandle());
+            readSink.complete();
         } finally {
             // Check if there is a readPending which was not processed yet.
             // This could be for two reasons:
@@ -1066,9 +1076,9 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
 
         inWriteFlushed = true;
 
-        // Mark all pending write requests as failure if the channel is inactive.
-        if (!isActive()) {
-            try {
+        try {
+            // Mark all pending write requests as failure if the channel is inactive.
+            if (!isActive()) {
                 // Check if we need to generate the exception at all.
                 if (!outboundBuffer.isEmpty()) {
                     if (isOpen()) {
@@ -1079,32 +1089,12 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
                         outboundBuffer.failFlushed(newClosedChannelException(initialCloseCause, "writeFlushed()"));
                     }
                 }
-            } finally {
-                inWriteFlushed = false;
+                return;
             }
-            return;
-        }
 
-        WriteHandleFactory.WriteHandle writeHandle = writeHandle();
-        try {
-            try {
-                doWrite(outboundBuffer, writeHandle);
-            } catch (Throwable t) {
-                handleWriteError(t);
-            } finally {
-                try {
-                    writeLoopComplete(outboundBuffer.isEmpty());
-                } catch (Throwable cause) {
-                    // Something is really seriously wrong!
-                    closeWithErrorFromWriteFlushed(cause);
-                }
-            }
+            WriteSink writeSink = writeSink();
+            writeSink.processWriteLoop(outboundBuffer);
         } finally {
-            writeHandle.writeComplete();
-
-            // It's important that we call this with notifyLater true so we not get into trouble when flush() is called
-            // again in channelWritabilityChanged(...).
-            updateWritabilityIfNeeded(true, true);
             inWriteFlushed = false;
         }
     }
@@ -1254,7 +1244,7 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
      *
      * @return the outbound buffer.
      */
-    protected final ChannelOutboundBuffer outboundBuffer() {
+    final ChannelOutboundBuffer outboundBuffer() {
         return outboundBuffer;
     }
 
@@ -1299,22 +1289,31 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
     protected abstract void doRead(boolean wasReadPendingAlready) throws Exception;
 
     /**
-     * Flush the content of the given buffer to the remote peer.
+     * Called in a loop when writes should be performed until this methods returns {@code false} or there are
+     * no more messages to write.
+     *
+     * @param writeSink                             the {@link WriteSink} that must be completed with the write
+     *                                              progress.
+     *                                              {@link WriteSink#complete(long, long, int, boolean)} or
+     *                                              {@link WriteSink#complete(long, Throwable, boolean)} must be called
+     *                                              exactly once before this method returns non-exceptional.
+     * @throws Exception                            if and error happened during writing.
      */
-    protected abstract void doWrite(ChannelOutboundBuffer in,  WriteHandleFactory.WriteHandle writeHandle)
-            throws Exception;
+    protected abstract void doWriteNow(WriteSink writeSink) throws Exception;
 
     /**
      * Connect to remote peer.
      *
      * @param remoteAddress     the address of the remote peer.
      * @param localAddress      the local address of this channel.
+     * @param initialData       the initial data that is written during connect
+     *                          (if {@link ChannelOption#TCP_FASTOPEN_CONNECT} is supported)
      * @return                  {@code true} if the connect was completed, {@code false} if {@link #finishConnect()}
      *                          will be called later again to try finishing the connect.
      * @throws Exception        thrown on error.
      */
     protected abstract boolean doConnect(
-            SocketAddress remoteAddress, SocketAddress localAddress) throws Exception;
+            SocketAddress remoteAddress, SocketAddress localAddress, Buffer initialData) throws Exception;
 
     /**
      * Finish a connect request.
@@ -1355,8 +1354,21 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
             }
 
             boolean wasActive = isActive();
-            if (doConnect(remoteAddress, localAddress)) {
+            int readable = 0;
+            Buffer message = null;
+            if (isOptionSupported(ChannelOption.TCP_FASTOPEN_CONNECT) && getOption(TCP_FASTOPEN_CONNECT)) {
+                outboundBuffer.addFlush();
+                Object current = outboundBuffer.current();
+                if (current instanceof Buffer) {
+                    message = (Buffer) current;
+                    readable = message.readableBytes();
+                }
+            }
+            if (doConnect(remoteAddress, localAddress, message)) {
                 fulfillConnectPromise(promise, wasActive);
+                if (message != null) {
+                    outboundBuffer.removeBytes(readable - message.readableBytes());
+                }
             } else {
                 connectPromise = promise;
                 requestedRemoteAddress = (R) remoteAddress;
@@ -1942,7 +1954,7 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
             return readBufferAllocator.allocate(readBufferAllocator(), readHandle.estimatedBufferCapacity());
         }
 
-        void complete(ReadHandleFactory.ReadHandle readHandle) {
+        void complete() {
             // Check if something was read as in this case we wall need to call the *ReadComplete methods.
             if (readSomething) {
                 readSomething = false;
@@ -1951,8 +1963,8 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
             }
         }
 
-        boolean completeFailure(ReadHandleFactory.ReadHandle readHandle, Throwable cause) {
-            complete(readHandle);
+        boolean completeFailure(Throwable cause) {
+            complete();
             pipeline().fireChannelExceptionCaught(cause);
 
             if (cause instanceof PortUnreachableException) {
@@ -1964,6 +1976,173 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
                 return true;
             }
             return false;
+        }
+    }
+
+    /**
+     * Sink that will be used by {@link #doWriteNow(WriteSink)} implementations.
+     */
+    protected final class WriteSink {
+        final WriteHandleFactory.WriteHandle writeHandle;
+        private ChannelOutboundBuffer outboundBuffer;
+
+        private long attemptedBytesWrite;
+        private long actualBytesWrite;
+        private int messagesWritten;
+        private Throwable writeError;
+
+        private Boolean continueWriting;
+
+        WriteSink(WriteHandleFactory.WriteHandle writeHandle) {
+            this.writeHandle = writeHandle;
+        }
+
+        void processWriteLoop(ChannelOutboundBuffer outboundBuffer) {
+            this.outboundBuffer = outboundBuffer;
+            try {
+                try {
+                    // We checked before is the outboundBuffer is empty so let's use a do-while loop.
+                    do {
+                        doWriteNow(writeSink);
+                    } while (continueWriting() && !outboundBuffer.isEmpty());
+                } catch (Throwable t) {
+                    handleWriteError(t);
+                } finally {
+                    try {
+                        writeLoopComplete(outboundBuffer.isEmpty());
+                    } catch (Throwable cause) {
+                        // Something is really seriously wrong!
+                        closeWithErrorFromWriteFlushed(cause);
+                    }
+                }
+            } finally {
+                writeHandle.writeComplete();
+
+                // It's important that we call this with notifyLater true so we not get into trouble when flush() is
+                // called again in channelWritabilityChanged(...).
+                updateWritabilityIfNeeded(true, true);
+            }
+        }
+
+        /**
+         * Return the estimated maximum number of bytes that can be written with one gathering write operation.
+         *
+         * @return number of bytes.
+         */
+        public long estimatedMaxBytesPerGatheringWrite() {
+            return writeHandle.estimatedMaxBytesPerGatheringWrite();
+        }
+
+        /**
+         * The number of flushed messages that are ready to be written.
+         *
+         * @return the number of messages.
+         */
+        public int size() {
+            return outboundBuffer.size();
+        }
+
+        /**
+         * Return the first message that should be written.
+         *
+         * @return                          the first message.
+         * @throws IllegalStateException    if called after {@link #complete(long, long, int, boolean)}
+         *                                  or {@link #complete(long, Throwable, boolean)} was called.
+         */
+        public Object first() {
+            return outboundBuffer.current();
+        }
+
+        /**
+         * Call {@link Function#apply(Object)} for each message that is flushed until
+         * {@link Function#apply(Object)} returns {@code false} or there are no more flushed messages.
+         *
+         * @param processor                 the {@link Function} to use.
+         * @throws IllegalStateException    if called after {@link #complete(long, long, int, boolean)}
+         *                                  or {@link #complete(long, Throwable, boolean)} was called.
+         */
+        public void forEach(Function<Object, Boolean> processor) {
+            outboundBuffer.forEachFlushedMessage(processor);
+        }
+
+        /**
+         * Notify of the last write operation and its result.
+         *
+         * @param attemptedBytesWrite       The number of  bytes the write operation did attempt to write.
+         * @param actualBytesWrite          The number of bytes from the previous write operation. This may be negative
+         *                                  if a write error occurs.
+         * @param messagesWritten           The number of written messages, or {@code -1} if the amount of written
+         *                                  messages is unknown.
+         * @param mightContinueWriting      {@code true} if the write loop might continue writing messages,
+         *                                  {@code false} otherwise
+         *
+         * @throws IllegalStateException    if called after {@link #complete(long, long, int, boolean)}
+         *                                  or {@link #complete(long, Throwable, boolean)} was called.
+         */
+        public void complete(long attemptedBytesWrite, long actualBytesWrite, int messagesWritten,
+                             boolean mightContinueWriting) {
+            checkCompleteAlready();
+            this.attemptedBytesWrite = checkPositiveOrZero(attemptedBytesWrite, "attemptedBytesWrite");
+            this.actualBytesWrite = actualBytesWrite;
+            this.messagesWritten = checkInRange(messagesWritten, -1, Integer.MAX_VALUE, "messagesWritten");
+            this.continueWriting = mightContinueWriting ? Boolean.TRUE : Boolean.FALSE;
+            this.writeError = null;
+        }
+
+        /**
+         * Notify of the last write operation and its result.
+         *
+         * @param attemptedBytesWrite       The number of  bytes the write operation did attempt to write.
+         * @param cause                     The error that happened during the write and can be recovered.
+         * @param mightContinueWriting      {@code true} if the write loop might continue writing messages,
+         *                                  {@code false} otherwise.
+         *
+         * @throws IllegalStateException    if called after {@link #complete(long, long, int, boolean)}
+         *                                  or {@link #complete(long, Throwable, boolean)} was called.
+         */
+        public void complete(long attemptedBytesWrite, Throwable cause, boolean mightContinueWriting) {
+            checkCompleteAlready();
+            this.attemptedBytesWrite = checkPositiveOrZero(attemptedBytesWrite, "attemptedBytesWrite");
+            this.writeError = requireNonNull(cause, "cause");
+            this.actualBytesWrite = 0;
+            this.messagesWritten = 0;
+            this.continueWriting = mightContinueWriting ? Boolean.TRUE : Boolean.FALSE;
+        }
+
+        private void checkCompleteAlready() {
+            if (continueWriting != null) {
+                throw new IllegalStateException(StringUtil.simpleClassName(WriteSink.class) +
+                        ".complete(...) was already called");
+            }
+        }
+
+        private boolean continueWriting() {
+            if (continueWriting == null) {
+                throw new IllegalStateException(StringUtil.simpleClassName(WriteSink.class) +
+                        ".complete(...) was not called");
+            }
+            try {
+                if (writeError != null) {
+                    outboundBuffer.remove(writeError);
+                } else {
+                    if (messagesWritten > 0) {
+                        do {
+                            outboundBuffer.remove();
+                            messagesWritten--;
+                        } while (messagesWritten > 0);
+                    } else if (messagesWritten == -1 && actualBytesWrite >= 0) {
+                        messagesWritten = outboundBuffer.removeBytes(actualBytesWrite);
+                    }
+                }
+                return writeHandle.lastWrite(attemptedBytesWrite, actualBytesWrite, messagesWritten) &&
+                        continueWriting == Boolean.TRUE;
+            } finally {
+                writeError = null;
+                messagesWritten = 0;
+                attemptedBytesWrite = 0;
+                actualBytesWrite = 0;
+                continueWriting = null;
+            }
         }
     }
 }
