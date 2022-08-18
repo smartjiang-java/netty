@@ -2126,10 +2126,11 @@ public abstract class AbstractChannel<P extends Channel, L extends SocketAddress
                     outboundBuffer.remove(writeError);
                 } else {
                     if (messagesWritten > 0) {
+                        int written = messagesWritten;
                         do {
                             outboundBuffer.remove();
-                            messagesWritten--;
-                        } while (messagesWritten > 0);
+                            written--;
+                        } while (written > 0);
                     } else if (messagesWritten == -1 && actualBytesWrite >= 0) {
                         messagesWritten = outboundBuffer.removeBytes(actualBytesWrite);
                     }
