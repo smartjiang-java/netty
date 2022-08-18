@@ -412,7 +412,7 @@ final class ChannelOutboundBuffer {
      * in this {@link ChannelOutboundBuffer} until {@link Function#apply(Object)}
      * returns {@link Boolean#FALSE} or there are no more flushed messages to process.
      */
-    <T extends Exception> void forEachFlushedMessage(Function<Object, Boolean> processor) throws T {
+    void forEachFlushedMessage(Function<Object, Boolean> processor) {
         assert executor.inEventLoop();
 
         requireNonNull(processor, "processor");
