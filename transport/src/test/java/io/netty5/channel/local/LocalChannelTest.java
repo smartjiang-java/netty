@@ -594,11 +594,8 @@ public class LocalChannelTest {
             // Make sure a write operation is executed in the eventloop
             cc.pipeline().lastContext().executor().execute(() -> {
                 ccCpy.writeAndFlush(data).addListener(future -> {
-                    System.err.println(data + " " + future.cause());
                     Channel serverChannelCpy = serverChannelRef.get();
-                    serverChannelCpy.writeAndFlush(data2).addListener(f -> {
-                        f.cause().printStackTrace();
-                    });
+                    serverChannelCpy.writeAndFlush(data2);
                 });
             });
 
@@ -992,7 +989,6 @@ public class LocalChannelTest {
                     @Override
                     public void channelRead(final ChannelHandlerContext ctx, Object msg) throws Exception {
                         latch.countDown();
-                        System.err.println(latch);
                         if (latch.getCount() > 0) {
                             writeAndFlushReadOnSuccess(ctx, msg);
                         }
